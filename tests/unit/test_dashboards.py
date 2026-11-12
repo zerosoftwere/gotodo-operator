@@ -36,6 +36,12 @@ def _walk(node):
             yield from _walk(v)
 
 
+def test_metrics_dashboard_groups_by_juju_unit_not_instance():
+    text = (_ROOT / "gotodo-dashboard.json").read_text()
+    assert "by (instance)" not in text
+    assert "{{instance}}" not in text
+
+
 def test_metrics_dashboard_has_no_datasource_variable():
     text = (_ROOT / "gotodo-dashboard.json").read_text()
     assert "${datasource}" not in text

@@ -29,6 +29,19 @@ def test_reconcile_is_idempotent_without_changes(ctx, g):
     assert state.unit_status == testing.ActiveStatus("")
 
 
+def test_unchanged_active_but_unhealthy_blocks(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
+    g["write_file_if_changed"].return_value = False
+    g["wait_healthy"].return_value = False
+    state = ctx.run(ctx.on.config_changed(), testing.State())
+    g["restart"].assert_not_called()
+    assert g["wait_healthy"].call_args.kwargs == {"timeout": 5}
+    assert state.unit_status == testing.BlockedStatus(
+        "gotodo did not become healthy; see journalctl -u gotodo"
+    )
+
+
 def test_inactive_service_is_restarted(ctx, g):
     g["installed_version"].side_effect = None
     g["installed_version"].return_value = "v0.1.0"
@@ -87,6 +100,8 @@ def test_config_change_keeps_jwt_secret(ctx, g, caplog):
 
 
 def test_update_status_never_restarts(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
     state = ctx.run(ctx.on.update_status(), testing.State())
     assert state.unit_status == testing.ActiveStatus("")
     g["is_active"].return_value = False
@@ -98,6 +113,8 @@ def test_update_status_never_restarts(ctx, g):
 
 
 def test_update_status_unhealthy_blocks(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
     g["wait_healthy"].return_value = False
     state = ctx.run(ctx.on.update_status(), testing.State())
     assert state.unit_status == testing.BlockedStatus(
@@ -107,6 +124,8 @@ def test_update_status_unhealthy_blocks(ctx, g):
 
 
 def test_update_status_intended_stopped(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
     stored = testing.StoredState(
         owner_path="GotodoOperatorCharm", content={"intended_stopped": True}
     )
@@ -143,6 +162,42 @@ def test_token_ttl_with_newline_blocks(ctx, g):
     g["write_file_if_changed"].assert_not_called()
 
 
+@pytest.mark.parametrize("option", ["port", "ops-port"])
+def test_privileged_port_blocks(ctx, g, option):
+    state = ctx.run(ctx.on.config_changed(), testing.State(config={option: 1023}))
+    assert state.unit_status.message.startswith("invalid config:")
+    g["restart"].assert_not_called()
+
+
+@pytest.mark.parametrize("ttl", ["24h", "1h30m", "1.5h", "500ms"])
+def test_valid_token_ttl(ctx, g, ttl):
+    state = ctx.run(ctx.on.config_changed(), testing.State(config={"token-ttl": ttl}))
+    assert state.unit_status == testing.ActiveStatus("")
+
+
+@pytest.mark.parametrize("ttl", ["24 h", '"24h"', "abc", "24", "h", "24h "])
+def test_invalid_token_ttl_blocks(ctx, g, ttl):
+    state = ctx.run(ctx.on.config_changed(), testing.State(config={"token-ttl": ttl}))
+    assert state.unit_status.message.startswith("invalid config:")
+    g["write_file_if_changed"].assert_not_called()
+
+
+def test_marker_cleared_when_nothing_changed(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
+    g["write_file_if_changed"].return_value = False
+    ctx.run(ctx.on.config_changed(), testing.State())
+    assert not g["marker"].exists()
+
+
+def test_marker_set_before_install(ctx, g):
+    g["install_release"].side_effect = lambda *_a, **_k: (_ for _ in ()).throw(
+        gotodo.DownloadError("boom")
+    )
+    ctx.run(ctx.on.install(), testing.State())
+    assert g["marker"].exists()
+
+
 def test_port_equal_ops_port_blocks(ctx, g):
     state = ctx.run(ctx.on.config_changed(), testing.State(config={"port": 6060}))
     assert state.unit_status.message.startswith("invalid config:")
@@ -150,6 +205,8 @@ def test_port_equal_ops_port_blocks(ctx, g):
 
 
 def test_update_status_invalid_config_blocks(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
     state = ctx.run(ctx.on.update_status(), testing.State(config={"port": 70000}))
     assert state.unit_status.message.startswith("invalid config:")
     g["wait_healthy"].assert_not_called()

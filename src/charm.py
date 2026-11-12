@@ -23,6 +23,8 @@ import gotodo
 logger = logging.getLogger(__name__)
 
 _VERSION_RE = re.compile(r"^v[0-9A-Za-z._+-]+$")
+_TOKEN_TTL_RE = re.compile(r"^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$")
+_NOT_INSTALLED_FAIL = "gotodo is not installed; see juju debug-log"
 _STOPPED_MSG = "stopped by action; run the start action"
 _UNHEALTHY_MSG = "gotodo did not become healthy; see journalctl -u gotodo"
 
@@ -108,12 +110,12 @@ class GotodoOperatorCharm(ops.CharmBase):
         mutex = int(self.config["mutex-profile-fraction"])
         block = int(self.config["block-profile-rate"])
         for name, value in (("port", port), ("ops-port", ops_port)):
-            if not 1 <= value <= 65535:
-                raise ConfigError(f"{name} must be between 1 and 65535")
+            if not 1024 <= value <= 65535:
+                raise ConfigError(f"{name} must be between 1024 and 65535")
         if port == ops_port:
             raise ConfigError("port and ops-port must differ")
-        if not token_ttl or any(c.isspace() for c in token_ttl):
-            raise ConfigError("token-ttl must be non-empty and contain no whitespace")
+        if not _TOKEN_TTL_RE.fullmatch(token_ttl):
+            raise ConfigError("token-ttl must be a Go duration such as 24h or 1h30m")
         if mutex < 0:
             raise ConfigError("mutex-profile-fraction must be >= 0")
         if block < 0:
@@ -129,14 +131,6 @@ class GotodoOperatorCharm(ops.CharmBase):
             return None
 
     # State helpers
-
-    def _running(self) -> bool:
-        """Return True when installed, not intended stopped, and active."""
-        return (
-            gotodo.installed_version() is not None
-            and not self._stored.intended_stopped
-            and gotodo.is_active()
-        )
 
     def _refresh_relations(self) -> None:
         """Refresh relation data; machine-observability is skipped on invalid config."""
@@ -197,58 +191,91 @@ class GotodoOperatorCharm(ops.CharmBase):
         version, settings = validated
 
         gotodo.ensure_user()
-        if gotodo.installed_version() != version:
-            self.unit.status = ops.MaintenanceStatus(f"installing gotodo {version}")
-            try:
-                gotodo.install_release(version)
-            except gotodo.ChecksumError:
-                logger.error("checksum mismatch for gotodo %s", version)
-                self.unit.status = ops.BlockedStatus(f"checksum mismatch for gotodo {version}")
-                return
-            except (gotodo.DownloadError, gotodo.ArchiveError) as e:
-                logger.error("installing gotodo %s failed: %s", version, e)
-                self.unit.status = ops.BlockedStatus(
-                    f"download of gotodo {version} failed; see juju debug-log"
-                )
-                return
-            gotodo.mark_restart_pending()
+        # Restart marker: set BEFORE anything that may change the workload, so a hook that
+        # fails part way cannot lose the pending restart. Writes are marked unconditionally
+        # before they happen; the marker is cleared again at the end only if nothing was
+        # installed, neither write changed content, and it was not already pending.
+        was_pending = gotodo.restart_pending()
+        installed = gotodo.installed_version() != version
+        if installed and not self._install(version):
+            return
 
         gotodo.ensure_dirs()
         secret = gotodo.load_or_create_jwt_secret()
-        if gotodo.write_file_if_changed(
+        gotodo.mark_restart_pending()
+        env_changed = gotodo.write_file_if_changed(
             gotodo.ENV_PATH, gotodo.render_env(settings, secret), mode=0o600
-        ):
-            gotodo.mark_restart_pending()
-        if gotodo.write_file_if_changed(gotodo.UNIT_PATH, gotodo.render_unit(), mode=0o644):
-            gotodo.mark_restart_pending()
+        )
+        unit_changed = gotodo.write_file_if_changed(
+            gotodo.UNIT_PATH, gotodo.render_unit(), mode=0o644
+        )
+        if not (installed or env_changed or unit_changed or was_pending):
+            gotodo.clear_restart_pending()
+        if unit_changed:
             gotodo.daemon_reload()
-            gotodo.enable()
+            if not self._stored.intended_stopped:
+                gotodo.enable()
 
         self.unit.set_ports(settings.port)
         self.unit.set_workload_version(version)
 
+        self._converge_service(settings.port)
+
+        self._refresh_relations()
+
+    def _install(self, version: str) -> bool:
+        """Install the release (marking a restart first); Block and return False on failure."""
+        gotodo.mark_restart_pending()
+        self.unit.status = ops.MaintenanceStatus(f"installing gotodo {version}")
+        try:
+            gotodo.install_release(version)
+        except gotodo.ChecksumError:
+            logger.error("checksum mismatch for gotodo %s", version)
+            self.unit.status = ops.BlockedStatus(f"checksum mismatch for gotodo {version}")
+            return False
+        except (gotodo.DownloadError, gotodo.ArchiveError) as e:
+            logger.error("installing gotodo %s failed: %s", version, e)
+            self.unit.status = ops.BlockedStatus(
+                f"download of gotodo {version} failed; see juju debug-log"
+            )
+            return False
+        return True
+
+    def _converge_service(self, port: int) -> None:
+        """Start, restart or probe the service according to intent and pending changes."""
         if self._stored.intended_stopped:
+            self._enforce_stopped()
             self.unit.status = ops.ActiveStatus(_STOPPED_MSG)
         elif gotodo.restart_pending() or not gotodo.is_active():
             self.unit.status = ops.MaintenanceStatus("restarting gotodo")
             gotodo.restart()
             gotodo.clear_restart_pending()
-            if gotodo.wait_healthy(settings.port):
-                self.unit.status = ops.ActiveStatus("")
-            else:
-                self.unit.status = ops.BlockedStatus(_UNHEALTHY_MSG)
-        else:
+            healthy = gotodo.wait_healthy(port)
+            self.unit.status = (
+                ops.ActiveStatus("") if healthy else ops.BlockedStatus(_UNHEALTHY_MSG)
+            )
+        elif gotodo.wait_healthy(port, timeout=5):
             self.unit.status = ops.ActiveStatus("")
+        else:
+            self.unit.status = ops.BlockedStatus(_UNHEALTHY_MSG)
 
-        self._refresh_relations()
+    def _enforce_stopped(self) -> None:
+        """Make the service match a stop action: not running and not enabled at boot."""
+        if gotodo.is_active():
+            gotodo.disable_now()
 
     def _on_update_status(self, _: ops.UpdateStatusEvent) -> None:
         """Check the workload without restarting it."""
         validated = self._validated()
         if validated is None:
             return
-        _version, settings = validated
-        if self._stored.intended_stopped:
+        version, settings = validated
+        if gotodo.installed_version() != version:
+            self.unit.status = ops.BlockedStatus(
+                f"gotodo {version} is not installed; run the restart action to retry"
+            )
+        elif self._stored.intended_stopped:
+            self._enforce_stopped()
             self.unit.status = ops.ActiveStatus(_STOPPED_MSG)
         elif not gotodo.is_active():
             self.unit.status = ops.BlockedStatus("gotodo is not running; run the restart action")
@@ -257,13 +284,22 @@ class GotodoOperatorCharm(ops.CharmBase):
         else:
             self.unit.status = ops.ActiveStatus("")
 
-    def _action_port(self, event: ops.ActionEvent) -> int | None:
-        """Return the validated port, or fail the action and return None."""
+    def _action_validated(self, event: ops.ActionEvent) -> tuple[str, int] | None:
+        """Return (version, port), or fail the action and return None."""
         validated = self._validated()
         if validated is None:
             event.fail(str(self.unit.status.message))
             return None
-        return validated[1].port
+        return validated[0], validated[1].port
+
+    def _ensure_installed(self, event: ops.ActionEvent, version: str) -> bool:
+        """Retry the install via reconcile if needed; fail the action if still missing."""
+        if gotodo.installed_version() != version:
+            self._reconcile()
+            if gotodo.installed_version() != version:
+                event.fail(_NOT_INSTALLED_FAIL)
+                return False
+        return True
 
     def _finish_action(self, event: ops.ActionEvent, port: int) -> None:
         """Wait for health, set status and report the service state."""
@@ -276,10 +312,14 @@ class GotodoOperatorCharm(ops.CharmBase):
         self._refresh_relations()
 
     def _on_start_action(self, event: ops.ActionEvent) -> None:
-        port = self._action_port(event)
-        if port is None:
+        validated = self._action_validated(event)
+        if validated is None:
             return
+        version, port = validated
         self._stored.intended_stopped = False
+        if not self._ensure_installed(event, version):
+            return
+        gotodo.enable()
         if gotodo.restart_pending():
             gotodo.restart()
         else:
@@ -288,17 +328,24 @@ class GotodoOperatorCharm(ops.CharmBase):
         self._finish_action(event, port)
 
     def _on_restart_action(self, event: ops.ActionEvent) -> None:
-        port = self._action_port(event)
-        if port is None:
+        validated = self._action_validated(event)
+        if validated is None:
             return
+        version, port = validated
         self._stored.intended_stopped = False
+        if not self._ensure_installed(event, version):
+            return
+        gotodo.enable()
         gotodo.restart()
         gotodo.clear_restart_pending()
         self._finish_action(event, port)
 
     def _on_stop_action(self, event: ops.ActionEvent) -> None:
+        if gotodo.installed_version() is None:
+            event.fail(_NOT_INSTALLED_FAIL)
+            return
         self._stored.intended_stopped = True
-        gotodo.stop()
+        gotodo.disable_now()
         self.unit.status = ops.ActiveStatus(_STOPPED_MSG)
         event.set_results(gotodo.service_state())
         self._refresh_relations()

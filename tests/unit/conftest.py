@@ -19,6 +19,10 @@ _FUNCS = [
     "write_file_if_changed",
     "daemon_reload",
     "enable",
+    "disable_now",
+    "start",
+    "stop",
+    "service_state",
     "restart",
     "is_active",
     "wait_healthy",
@@ -52,6 +56,11 @@ def g(tmp_path):
     mocks["load_or_create_jwt_secret"].return_value = "s3cret"
     mocks["render_env"].return_value = "ENV"
     mocks["render_unit"].return_value = "UNIT"
+    mocks["service_state"].return_value = {
+        "active-state": "active",
+        "sub-state": "running",
+        "main-pid": "42",
+    }
     yield mocks
     for p in patchers:
         p.stop()
@@ -60,3 +69,17 @@ def g(tmp_path):
 @pytest.fixture
 def ctx():
     return testing.Context(GotodoOperatorCharm)
+
+
+@pytest.fixture(autouse=True)
+def _no_shell_out(request):
+    """Fail charm-level tests that would shell out; test_gotodo_system patches _run itself."""
+    if request.module.__name__.endswith("test_gotodo_system"):
+        yield
+        return
+
+    def _boom(*_a, **_k):
+        raise AssertionError("unexpected shell-out")
+
+    with patch("gotodo._run", _boom):
+        yield

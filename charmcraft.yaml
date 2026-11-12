@@ -85,7 +85,7 @@ config:
 actions:
   start:
     description: |
-      Start the GoTodo systemd service on this unit.
+      Start the GoTodo systemd service on this unit (restarting instead if a change is pending).
 
       Use this to bring the workload back after running the stop action.
   stop:
@@ -96,6 +96,4 @@ actions:
       maintenance. Run the start action to bring it back.
   restart:
     description: |
-      Restart the GoTodo systemd service on this unit.
-
-      Use this to pick up changes that do not trigger an automatic restart.
+      Restart gotodo, retrying the install if the configured version is not installed.

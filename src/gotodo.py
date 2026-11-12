@@ -296,6 +296,11 @@ def stop() -> None:
     _systemctl("stop", SERVICE)
 
 
+def disable_now() -> None:
+    """Disable the service at boot and stop it now."""
+    _systemctl("disable", "--now", SERVICE)
+
+
 def restart() -> None:
     """Restart the service."""
     _systemctl("restart", SERVICE)

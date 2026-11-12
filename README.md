@@ -13,17 +13,19 @@ A Juju machine charm for GoTodo, a small todo app with a JSON API, a web UI, SQL
 | `mutex-profile-fraction` | int | `5` | Go mutex profile sampling fraction (0 disables). |
 | `block-profile-rate` | int | `5` | Go block profile rate (0 disables). |
 
-Invalid configuration sets `BlockedStatus("invalid config: <reason>")`. The charm keeps a restart marker at `/etc/gotodo/.restart-pending` so a change that needs a restart is not lost if a hook fails part way; it is cleared after a successful restart.
+`port` and `ops-port` must be at least 1024 (the service is unprivileged) and `token-ttl` must be a Go duration such as `24h` or `1h30m`. Invalid configuration sets `BlockedStatus("invalid config: <reason>")`. The charm keeps a restart marker at `/etc/gotodo/.restart-pending` so a change that needs a restart is not lost if a hook fails part way; it is cleared once the restart command returns.
 
 ## Actions
 
 | Action | Description |
 | --- | --- |
-| `start` | Start the service. |
-| `stop` | Stop the service. The unit stays active with the message "stopped by action; run the start action", and the stop is sticky across hooks until `start` or `restart`. |
-| `restart` | Restart the service. |
+| `start` | Start gotodo (restarting instead if a change is pending). Re-enables it at boot. If the configured version is not installed, retries the install first and fails with "gotodo is not installed; see juju debug-log" if that does not work. |
+| `stop` | Stop the service and disable it at boot, so it stays stopped across reboots. Fails with "gotodo is not installed; see juju debug-log" on a unit where it was never installed. The unit stays active with the message "stopped by action; run the start action", and the stop is sticky across hooks until `start` or `restart`. |
+| `restart` | Restart the service, retrying the install first if the configured version is not installed (same failure message as `start`). |
 
 Each action returns `active-state`, `sub-state` and `main-pid`.
+
+If the configured version is not installed (for example a failed download), `update-status` sets `Blocked("gotodo <version> is not installed; run the restart action to retry")`. It never downloads; run the `restart` action to retry.
 
 ## Relations (provides)
 
@@ -75,7 +77,7 @@ After deploying and relating as above, and generating some traffic:
 ```
 uvx --with tox-uv tox -e format,lint,unit
 charmcraft pack
-CHARM_PATH=./gotodo-operator_*.charm tox -e integration
+CHARM_PATH=$(ls ./gotodo-operator_*.charm) tox -e integration
 ```
 
 The integration tests deploy to a VM on a Juju controller. Set `ALLOY_SUB_CHARM_PATH` to also run the alloy-sub scrape test. See [CONTRIBUTING.md](CONTRIBUTING.md).

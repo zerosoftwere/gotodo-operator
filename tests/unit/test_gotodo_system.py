@@ -47,6 +47,7 @@ def test_systemctl_verbs():
         (gotodo.stop, ["systemctl", "stop", "gotodo"]),
         (gotodo.restart, ["systemctl", "restart", "gotodo"]),
         (gotodo.disable, ["systemctl", "disable", "gotodo"]),
+        (gotodo.disable_now, ["systemctl", "disable", "--now", "gotodo"]),
     ]:
         with patch("gotodo._run", return_value=_cp(0)) as run:
             fn()

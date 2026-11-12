@@ -14,6 +14,8 @@ at load time (`src/dashboards.py`).
   `label_values(gotodo_http_requests_in_flight{juju_application=~"$juju_application"}, juju_unit)`,
   because `instance` is `localhost:<port>` on every unit.
 - Every `instance=~"$instance"` matcher changed to `juju_unit=~"$juju_unit"`.
+- Every `by (instance)` aggregation changed to `by (juju_unit)` and every `{{instance}}`
+  legend to `{{juju_unit}}`, so units on different machines are not merged.
 - `job` and `route` variables kept.
 
 ## gotodo-profiles-dashboard.json (Pyroscope)
