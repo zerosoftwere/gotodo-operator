@@ -1,0 +1,101 @@
+# This file configures Charmcraft.
+# See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/
+type: charm
+name: gotodo-operator
+title: GoTodo Operator
+summary: Machine charm for the GoTodo todo app with observability integrations.
+description: |
+  GoTodo is a small todo app with a JSON API, a web UI, SQLite storage, JWT
+  authentication, and Prometheus metrics and Go pprof served on a loopback ops
+  port.
+
+  This charm installs GoTodo from GitHub releases and runs it under systemd as
+  the `gotodo` user. Start, stop and restart actions control the service.
+
+  The charm publishes metrics and journal logs to alloy-sub, exposes pprof
+  targets for continuous profiling, and provides Grafana dashboards.
+
+# Documentation:
+# https://documentation.ubuntu.com/charmcraft/stable/howto/build-guides/select-platforms/
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+assumes:
+  - juju >= 3.6
+
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
+
+provides:
+  machine-observability:
+    interface: machine_observability
+    scope: container
+    optional: true
+  profiling-source:
+    interface: pprof_scrape
+    scope: container
+    optional: true
+  grafana-dashboard:
+    interface: grafana_dashboard
+    optional: true
+
+config:
+  options:
+    version:
+      description: |
+        GoTodo release version to install from GitHub releases, for example
+        "v0.1.0". Changing this option upgrades or downgrades the workload.
+      default: "v0.1.0"
+      type: string
+    port:
+      description: |
+        TCP port on which GoTodo serves the web UI, the JSON API and Swagger.
+      default: 8080
+      type: int
+    ops-port:
+      description: |
+        Loopback TCP port on which GoTodo serves Prometheus metrics and Go
+        pprof endpoints. It is only reachable from the unit itself.
+      default: 6060
+      type: int
+    token-ttl:
+      description: |
+        Lifetime of issued JWT tokens, as a Go duration string such as "24h" or
+        "30m".
+      default: "24h"
+      type: string
+    mutex-profile-fraction:
+      description: |
+        Go mutex profile sampling fraction: on average 1 in N contention events
+        is reported in the mutex profile. Set to 0 to disable mutex profiling.
+      default: 5
+      type: int
+    block-profile-rate:
+      description: |
+        Go block profile rate: sample one blocking event per N nanoseconds spent
+        blocked. Set to 0 to disable block profiling.
+      default: 5
+      type: int
+
+actions:
+  start:
+    description: |
+      Start the GoTodo systemd service on this unit.
+
+      Use this to bring the workload back after running the stop action.
+  stop:
+    description: |
+      Stop the GoTodo systemd service, leaving the unit deployed.
+
+      Use this to take the workload out of service, for example before
+      maintenance. Run the start action to bring it back.
+  restart:
+    description: |
+      Restart the GoTodo systemd service on this unit.
+
+      Use this to pick up changes that do not trigger an automatic restart.
