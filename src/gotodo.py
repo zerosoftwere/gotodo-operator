@@ -24,6 +24,7 @@ DATA_DIR = Path("/var/gotodo")
 ENV_PATH = Path("/etc/gotodo/gotodo.env")
 UNIT_PATH = Path("/etc/systemd/system/gotodo.service")
 SERVICE = "gotodo"
+RESTART_MARKER = Path("/etc/gotodo/.restart-pending")
 
 _RELEASE_BASE = "https://github.com/ibrahim-dwellir/gotodo/releases/download"
 _FETCH_TIMEOUT = 60
@@ -351,6 +352,22 @@ def wait_healthy(
         if attempt < attempts - 1:
             sleep(interval)
     return False
+
+
+def mark_restart_pending(path: Path = RESTART_MARKER) -> None:
+    """Durably record that the workload needs a restart."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(mode=0o600)
+
+
+def restart_pending(path: Path = RESTART_MARKER) -> bool:
+    """Return True when a restart has been recorded and not yet completed."""
+    return path.exists()
+
+
+def clear_restart_pending(path: Path = RESTART_MARKER) -> None:
+    """Remove the restart marker."""
+    path.unlink(missing_ok=True)
 
 
 def remove_service(*, unit_path: Path = UNIT_PATH, env_path: Path = ENV_PATH) -> None:

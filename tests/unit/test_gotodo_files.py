@@ -60,3 +60,14 @@ def test_read_env_value_containing_equals(tmp_path: Path):
     env = tmp_path / "e"
     env.write_text("JWT_SECRET=a=b==\nX=1\n")
     assert gotodo.read_env(env) == {"JWT_SECRET": "a=b==", "X": "1"}
+
+
+def test_restart_marker_roundtrip(tmp_path: Path):
+    marker = tmp_path / "sub" / ".restart-pending"
+    assert gotodo.restart_pending(marker) is False
+    gotodo.mark_restart_pending(marker)
+    assert gotodo.restart_pending(marker) is True
+    assert marker.stat().st_mode & 0o777 == 0o600
+    gotodo.clear_restart_pending(marker)
+    assert gotodo.restart_pending(marker) is False
+    gotodo.clear_restart_pending(marker)  # missing is fine

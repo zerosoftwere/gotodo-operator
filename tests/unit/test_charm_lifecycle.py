@@ -26,12 +26,23 @@ _FUNCS = [
     "wait_healthy",
     "remove_service",
 ]
+_REAL_MARKER_FUNCS = {
+    "mark_restart_pending": gotodo.mark_restart_pending,
+    "restart_pending": gotodo.restart_pending,
+    "clear_restart_pending": gotodo.clear_restart_pending,
+}
 
 
 @pytest.fixture
-def g():
+def g(tmp_path):
     mocks = {}
     patchers = []
+    marker = tmp_path / "etc" / ".restart-pending"
+    mocks["marker"] = marker
+    for name, real in _REAL_MARKER_FUNCS.items():
+        p = patch(f"charm.gotodo.{name}", lambda real=real: real(marker))
+        p.start()
+        patchers.append(p)
     for name in _FUNCS:
         p = patch(f"charm.gotodo.{name}", MagicMock())
         mocks[name] = p.start()
@@ -231,20 +242,27 @@ def test_restart_pending_survives_failed_hook(ctx, g):
     g["restart"].side_effect = subprocess.CalledProcessError(1, "systemctl")
     with pytest.raises(testing.errors.UncaughtCharmError):
         ctx.run(ctx.on.install(), testing.State())
-    pending = testing.StoredState(
-        owner_path="GotodoOperatorCharm",
-        content={"intended_stopped": False, "restart_pending": True},
-    )
+    g["install_release"].assert_called_once()
+    assert g["marker"].exists()
+
     g["restart"].side_effect = None
     g["restart"].reset_mock()
     g["installed_version"].side_effect = None
     g["installed_version"].return_value = "v0.1.0"
     g["write_file_if_changed"].return_value = False
-    ctx.run(ctx.on.config_changed(), testing.State(stored_states=[pending]))
+    ctx.run(ctx.on.config_changed(), testing.State())
     g["restart"].assert_called_once()
+    assert not g["marker"].exists()
 
 
 def test_restart_pending_cleared_after_restart(ctx, g):
-    state = ctx.run(ctx.on.install(), testing.State())
-    stored = {s.owner_path: s.content for s in state.stored_states}
-    assert stored["GotodoOperatorCharm"]["restart_pending"] is False
+    ctx.run(ctx.on.install(), testing.State())
+    g["restart"].assert_called_once()
+    assert not g["marker"].exists()
+
+
+def test_remove_clears_marker(ctx, g):
+    g["marker"].parent.mkdir(parents=True)
+    g["marker"].touch()
+    ctx.run(ctx.on.remove(), testing.State())
+    assert not g["marker"].exists()
