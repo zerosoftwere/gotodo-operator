@@ -15,7 +15,9 @@ from charms.dwellir_observability.v0.machine_observability import (
     SourceTopology,
 )
 from charms.dwellir_observability.v0.pprof_scrape import PprofScrapeProvider, PprofSource
+from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 
+import dashboards
 import gotodo
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,12 @@ class GotodoOperatorCharm(ops.CharmBase):
         self._pprof = PprofScrapeProvider(
             self, relation_name="profiling-source", source_factory=self._pprof_source
         )
+        self._grafana_dashboards = GrafanaDashboardProvider(
+            self,
+            relation_name="grafana-dashboard",
+            dashboards_path="src/grafana_dashboard_templates",
+        )
+        self._register_dashboards()
         framework.observe(self.on.install, self._on_reconcile)
         framework.observe(self.on.config_changed, self._on_reconcile)
         framework.observe(self.on.upgrade_charm, self._on_reconcile)
@@ -77,6 +85,12 @@ class GotodoOperatorCharm(ops.CharmBase):
         framework.observe(self.on.start_action, self._on_start_action)
         framework.observe(self.on.stop_action, self._on_stop_action)
         framework.observe(self.on.restart_action, self._on_restart_action)
+
+    def _register_dashboards(self) -> None:
+        """Replace stored programmatic dashboards with the current bundled ones."""
+        self._grafana_dashboards.remove_non_builtin_dashboards()
+        for text in dashboards.load_dashboards(self.model.uuid, self.app.name):
+            self._grafana_dashboards.add_dashboard(text)
 
     # Configuration
 
