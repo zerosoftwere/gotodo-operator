@@ -14,6 +14,7 @@ from charms.dwellir_observability.v0.machine_observability import (
     MetricsEndpoint,
     SourceTopology,
 )
+from charms.dwellir_observability.v0.pprof_scrape import PprofScrapeProvider, PprofSource
 
 import gotodo
 
@@ -63,6 +64,9 @@ class GotodoOperatorCharm(ops.CharmBase):
                 self.on.upgrade_charm,
                 self.on.leader_elected,
             ],
+        )
+        self._pprof = PprofScrapeProvider(
+            self, relation_name="profiling-source", source_factory=self._pprof_source
         )
         framework.observe(self.on.install, self._on_reconcile)
         framework.observe(self.on.config_changed, self._on_reconcile)
@@ -121,12 +125,28 @@ class GotodoOperatorCharm(ops.CharmBase):
         )
 
     def _refresh_relations(self) -> None:
-        """Refresh relation data; skipped while config is invalid."""
+        """Refresh relation data; machine-observability is skipped on invalid config."""
+        self._pprof.publish()
         try:
             payload = self._machine_observability_payload()
         except ConfigError:
             return
         self._mo.publish(payload)
+
+    def _pprof_source(self) -> PprofSource | None:
+        """Return the pprof source, or None (withdraw) when it should not be scraped."""
+        if gotodo.installed_version() is None or self._stored.intended_stopped:
+            return None
+        try:
+            settings = self._settings()
+        except ConfigError:
+            return None
+        types = ["process_cpu", "godeltaprof_memory", "goroutine"]
+        if settings.mutex_profile_fraction > 0:
+            types.append("godeltaprof_mutex")
+        if settings.block_profile_rate > 0:
+            types.append("godeltaprof_block")
+        return PprofSource("gotodo", (f"127.0.0.1:{settings.ops_port}",), tuple(types))
 
     def _machine_observability_payload(self) -> MachineObservabilityPayload:
         """Build the v3 payload; raises ConfigError on invalid config."""

@@ -19,3 +19,8 @@ def test_machine_observability_matches_canonical_source():
 def test_grafana_dashboard_matches_canonical_source():
     path = LIB / "charms/grafana_k8s/v0/grafana_dashboard.py"
     assert _sha256(path) == "4873a60692d88f5fc0c871f97e55bf50d5c638baf8527943341057fea0b753da"
+
+
+def test_pprof_scrape_matches_canonical_source():
+    path = LIB / "charms/dwellir_observability/v0/pprof_scrape.py"
+    assert _sha256(path) == "7a010b9cb67508c280b5f1fd3eb03c6cde86dbad90a0719a021cef5c3d046a9f"
