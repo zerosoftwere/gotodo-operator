@@ -54,3 +54,9 @@ def test_render_unit_runs_as_gotodo():
         "WantedBy=multi-user.target",
     ):
         assert line in unit.splitlines()
+
+
+def test_read_env_value_containing_equals(tmp_path: Path):
+    env = tmp_path / "e"
+    env.write_text("JWT_SECRET=a=b==\nX=1\n")
+    assert gotodo.read_env(env) == {"JWT_SECRET": "a=b==", "X": "1"}

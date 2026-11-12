@@ -1,6 +1,7 @@
 """Workload logic for GoTodo (installation, configuration and service control)."""
 
 import hashlib
+import http.client
 import io
 import logging
 import os
@@ -53,7 +54,7 @@ def fetch_url(url: str) -> bytes:
     try:
         with urllib.request.urlopen(url, timeout=_FETCH_TIMEOUT) as response:  # noqa: S310
             return response.read()
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
         raise DownloadError(f"failed to download {url}: {e}") from e
 
 

@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import io
 import tarfile
 from pathlib import Path
@@ -55,6 +56,12 @@ def test_parse_checksum_finds_asset():
     assert gotodo.parse_checksum(text, "gotodo_v0.1.0_linux_amd64.tar.gz") == digest
 
 
+def test_parse_checksum_crlf_and_binary_marker():
+    digest = "ab" * 32
+    text = f"{digest} *gotodo_v0.1.0_linux_amd64.tar.gz\r\nother  x\r\n"
+    assert gotodo.parse_checksum(text, "gotodo_v0.1.0_linux_amd64.tar.gz") == digest
+
+
 def test_parse_checksum_missing_asset_raises():
     with pytest.raises(gotodo.ChecksumError):
         gotodo.parse_checksum("abc  other.tar.gz\n", "gotodo_v0.1.0_linux_amd64.tar.gz")
@@ -85,11 +92,13 @@ def test_install_release_checksum_mismatch_keeps_old_binary(tmp_path: Path):
 @pytest.mark.parametrize("bad", ["../evil", "/abs"])
 def test_install_release_rejects_path_traversal(tmp_path: Path, bad: str):
     opt = tmp_path / "opt"
+    opt.mkdir()
+    (opt / "gotodo").write_bytes(b"old")
     tarball = make_tarball({f"{PREFIX}/gotodo": b"binary", bad: b"x"})
     with pytest.raises(gotodo.ArchiveError):
         gotodo.install_release(VERSION, opt_dir=opt, fetch=make_fetch(tarball))
     assert not (tmp_path / "evil").exists()
-    assert not (opt / "gotodo").exists()
+    assert (opt / "gotodo").read_bytes() == b"old"
 
 
 def test_install_release_missing_binary_member_raises_archive_error(tmp_path: Path):
@@ -107,5 +116,36 @@ def test_fetch_error_propagates_as_download_error(tmp_path: Path):
     def fetch(url: str) -> bytes:
         raise gotodo.DownloadError("boom")
 
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    (opt / "gotodo").write_bytes(b"old")
     with pytest.raises(gotodo.DownloadError):
-        gotodo.install_release(VERSION, opt_dir=tmp_path / "opt", fetch=fetch)
+        gotodo.install_release(VERSION, opt_dir=opt, fetch=fetch)
+    assert (opt / "gotodo").read_bytes() == b"old"
+
+
+def test_fetch_url_incomplete_read_is_download_error(monkeypatch: pytest.MonkeyPatch):
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object):
+            return False
+
+        def read(self) -> bytes:
+            raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Resp())
+    with pytest.raises(gotodo.DownloadError):
+        gotodo.fetch_url("https://example.invalid/x")
+
+
+def test_install_release_rejects_symlink_binary_member(tmp_path: Path):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(f"{PREFIX}/gotodo")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tar.addfile(info)
+    with pytest.raises(gotodo.ArchiveError):
+        gotodo.install_release(VERSION, opt_dir=tmp_path / "opt", fetch=make_fetch(buf.getvalue()))
