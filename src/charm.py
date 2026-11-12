@@ -29,7 +29,7 @@ class GotodoOperatorCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        self._stored.set_default(intended_stopped=False)
+        self._stored.set_default(intended_stopped=False, restart_pending=False)
         framework.observe(self.on.install, self._on_reconcile)
         framework.observe(self.on.config_changed, self._on_reconcile)
         framework.observe(self.on.upgrade_charm, self._on_reconcile)
@@ -41,7 +41,7 @@ class GotodoOperatorCharm(ops.CharmBase):
 
     def _version(self) -> str:
         version = str(self.config["version"])
-        if not _VERSION_RE.match(version) or ".." in version:
+        if not _VERSION_RE.fullmatch(version) or ".." in version:
             raise ConfigError(f"version {version!r} must look like v1.2.3")
         return version
 
@@ -97,7 +97,6 @@ class GotodoOperatorCharm(ops.CharmBase):
         if validated is None:
             return
         version, settings = validated
-        changed = False
 
         gotodo.ensure_user()
         if gotodo.installed_version() != version:
@@ -114,16 +113,16 @@ class GotodoOperatorCharm(ops.CharmBase):
                     f"download of gotodo {version} failed; see juju debug-log"
                 )
                 return
-            changed = True
+            self._stored.restart_pending = True
 
         gotodo.ensure_dirs()
         secret = gotodo.load_or_create_jwt_secret()
         if gotodo.write_file_if_changed(
             gotodo.ENV_PATH, gotodo.render_env(settings, secret), mode=0o600
         ):
-            changed = True
+            self._stored.restart_pending = True
         if gotodo.write_file_if_changed(gotodo.UNIT_PATH, gotodo.render_unit(), mode=0o644):
-            changed = True
+            self._stored.restart_pending = True
             gotodo.daemon_reload()
             gotodo.enable()
 
@@ -132,9 +131,10 @@ class GotodoOperatorCharm(ops.CharmBase):
 
         if self._stored.intended_stopped:
             self.unit.status = ops.ActiveStatus(_STOPPED_MSG)
-        elif changed or not gotodo.is_active():
+        elif self._stored.restart_pending or not gotodo.is_active():
             self.unit.status = ops.MaintenanceStatus("restarting gotodo")
             gotodo.restart()
+            self._stored.restart_pending = False
             if gotodo.wait_healthy(settings.port):
                 self.unit.status = ops.ActiveStatus("")
             else:

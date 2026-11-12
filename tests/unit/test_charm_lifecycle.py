@@ -1,6 +1,7 @@
 """Unit tests for the charm lifecycle and reconcile."""
 
 import logging
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,3 +197,54 @@ def test_update_status_invalid_config_blocks(ctx, g):
     state = ctx.run(ctx.on.update_status(), testing.State(config={"port": 70000}))
     assert state.unit_status.message.startswith("invalid config:")
     g["wait_healthy"].assert_not_called()
+
+
+def test_version_with_trailing_newline_blocks(ctx, g):
+    state = ctx.run(ctx.on.install(), testing.State(config={"version": "v0.1.0\n"}))
+    assert state.unit_status.message.startswith("invalid config:")
+    g["install_release"].assert_not_called()
+
+
+@pytest.mark.parametrize("option", ["mutex-profile-fraction", "block-profile-rate"])
+def test_negative_profile_option_blocks(ctx, g, option):
+    state = ctx.run(ctx.on.config_changed(), testing.State(config={option: -1}))
+    assert state.unit_status.message.startswith("invalid config:")
+    g["restart"].assert_not_called()
+
+
+def test_unit_change_reloads_and_enables(ctx, g):
+    ctx.run(ctx.on.config_changed(), testing.State())
+    g["daemon_reload"].assert_called_once()
+    g["enable"].assert_called_once()
+
+
+def test_no_unit_change_skips_reload(ctx, g):
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
+    g["write_file_if_changed"].return_value = False
+    ctx.run(ctx.on.config_changed(), testing.State())
+    g["daemon_reload"].assert_not_called()
+    g["enable"].assert_not_called()
+
+
+def test_restart_pending_survives_failed_hook(ctx, g):
+    g["restart"].side_effect = subprocess.CalledProcessError(1, "systemctl")
+    with pytest.raises(testing.errors.UncaughtCharmError):
+        ctx.run(ctx.on.install(), testing.State())
+    pending = testing.StoredState(
+        owner_path="GotodoOperatorCharm",
+        content={"intended_stopped": False, "restart_pending": True},
+    )
+    g["restart"].side_effect = None
+    g["restart"].reset_mock()
+    g["installed_version"].side_effect = None
+    g["installed_version"].return_value = "v0.1.0"
+    g["write_file_if_changed"].return_value = False
+    ctx.run(ctx.on.config_changed(), testing.State(stored_states=[pending]))
+    g["restart"].assert_called_once()
+
+
+def test_restart_pending_cleared_after_restart(ctx, g):
+    state = ctx.run(ctx.on.install(), testing.State())
+    stored = {s.owner_path: s.content for s in state.stored_states}
+    assert stored["GotodoOperatorCharm"]["restart_pending"] is False
