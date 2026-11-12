@@ -8,6 +8,12 @@ import logging
 import re
 
 import ops
+from charms.dwellir_observability.v0.machine_observability import (
+    MachineObservabilityPayload,
+    MachineObservabilityProvider,
+    MetricsEndpoint,
+    SourceTopology,
+)
 
 import gotodo
 
@@ -22,6 +28,25 @@ class ConfigError(Exception):
     """Raised when charm configuration is invalid."""
 
 
+class _LeaderOnlyMachineObservabilityProvider(MachineObservabilityProvider):
+    """Provider that only writes app data on the leader and tolerates bad config."""
+
+    def _on_refresh(self, _: ops.EventBase) -> None:
+        if not self.model.unit.is_leader() or self._payload_factory is None:
+            return
+        try:
+            payload = self._payload_factory()
+        except ConfigError:
+            return
+        self.publish(payload)
+
+    def publish(self, payload: MachineObservabilityPayload | dict) -> None:
+        """Publish the payload, only when this unit is the leader."""
+        if not self.model.unit.is_leader():
+            return
+        super().publish(payload)
+
+
 class GotodoOperatorCharm(ops.CharmBase):
     """Charm the GoTodo application."""
 
@@ -30,6 +55,15 @@ class GotodoOperatorCharm(ops.CharmBase):
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
         self._stored.set_default(intended_stopped=False)
+        self._mo = _LeaderOnlyMachineObservabilityProvider(
+            self,
+            payload_factory=self._machine_observability_payload,
+            refresh_events=[  # pyright: ignore[reportArgumentType]
+                self.on.config_changed,
+                self.on.upgrade_charm,
+                self.on.leader_elected,
+            ],
+        )
         framework.observe(self.on.install, self._on_reconcile)
         framework.observe(self.on.config_changed, self._on_reconcile)
         framework.observe(self.on.upgrade_charm, self._on_reconcile)
@@ -87,7 +121,34 @@ class GotodoOperatorCharm(ops.CharmBase):
         )
 
     def _refresh_relations(self) -> None:
-        """Refresh relation data; filled in by later tasks."""
+        """Refresh relation data; skipped while config is invalid."""
+        try:
+            payload = self._machine_observability_payload()
+        except ConfigError:
+            return
+        self._mo.publish(payload)
+
+    def _machine_observability_payload(self) -> MachineObservabilityPayload:
+        """Build the v3 payload; raises ConfigError on invalid config."""
+        ops_port = self._settings().ops_port
+        return MachineObservabilityPayload(
+            schema_version=3,
+            charm_name=self.meta.name,
+            source_topology=SourceTopology(
+                model=self.model.name,
+                model_uuid=self.model.uuid,
+                application=self.app.name,
+                unit=self.unit.name,
+                charm_name=self.meta.name,
+            ),
+            metrics_endpoints=[
+                MetricsEndpoint(targets=[f"localhost:{ops_port}"], path="/metrics", scheme="http")
+            ],
+            systemd_units=["gotodo.service"],
+            journal_match_expressions=[],
+            log_files=[],
+            artifacts=[],
+        )
 
     # Event handlers
 
