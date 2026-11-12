@@ -36,6 +36,9 @@ class GotodoOperatorCharm(ops.CharmBase):
         framework.observe(self.on.start, self._on_reconcile)
         framework.observe(self.on.update_status, self._on_update_status)
         framework.observe(self.on.remove, self._on_remove)
+        framework.observe(self.on.start_action, self._on_start_action)
+        framework.observe(self.on.stop_action, self._on_stop_action)
+        framework.observe(self.on.restart_action, self._on_restart_action)
 
     # Configuration
 
@@ -158,6 +161,52 @@ class GotodoOperatorCharm(ops.CharmBase):
             self.unit.status = ops.BlockedStatus(_UNHEALTHY_MSG)
         else:
             self.unit.status = ops.ActiveStatus("")
+
+    def _action_port(self, event: ops.ActionEvent) -> int | None:
+        """Return the validated port, or fail the action and return None."""
+        validated = self._validated()
+        if validated is None:
+            event.fail(str(self.unit.status.message))
+            return None
+        return validated[1].port
+
+    def _finish_action(self, event: ops.ActionEvent, port: int) -> None:
+        """Wait for health, set status and report the service state."""
+        if gotodo.wait_healthy(port):
+            self.unit.status = ops.ActiveStatus("")
+            event.set_results(gotodo.service_state())
+        else:
+            self.unit.status = ops.BlockedStatus(_UNHEALTHY_MSG)
+            event.fail(_UNHEALTHY_MSG)
+        self._refresh_relations()
+
+    def _on_start_action(self, event: ops.ActionEvent) -> None:
+        port = self._action_port(event)
+        if port is None:
+            return
+        self._stored.intended_stopped = False
+        if gotodo.restart_pending():
+            gotodo.restart()
+        else:
+            gotodo.start()
+        gotodo.clear_restart_pending()
+        self._finish_action(event, port)
+
+    def _on_restart_action(self, event: ops.ActionEvent) -> None:
+        port = self._action_port(event)
+        if port is None:
+            return
+        self._stored.intended_stopped = False
+        gotodo.restart()
+        gotodo.clear_restart_pending()
+        self._finish_action(event, port)
+
+    def _on_stop_action(self, event: ops.ActionEvent) -> None:
+        self._stored.intended_stopped = True
+        gotodo.stop()
+        self.unit.status = ops.ActiveStatus(_STOPPED_MSG)
+        event.set_results(gotodo.service_state())
+        self._refresh_relations()
 
     def _on_remove(self, _: ops.RemoveEvent) -> None:
         """Remove the service and its files; /var/gotodo is kept."""
