@@ -7,8 +7,10 @@ import logging
 import os
 import secrets
 import shutil
+import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -222,3 +224,139 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 """
+
+
+_USER = "gotodo"
+_HEALTH_TIMEOUT = 2
+
+
+def _run(argv: list[str]) -> subprocess.CompletedProcess:
+    """Run a command without raising on a non-zero exit."""
+    return subprocess.run(argv, check=False, capture_output=True, text=True)  # noqa: S603
+
+
+def _run_checked(argv: list[str]) -> subprocess.CompletedProcess:
+    result = _run(argv)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, argv, output=result.stdout, stderr=result.stderr
+        )
+    return result
+
+
+def ensure_user() -> None:
+    """Create the gotodo system user and group if missing."""
+    if _run(["getent", "passwd", _USER]).returncode == 0:
+        return
+    _run_checked(
+        [
+            "useradd",
+            "--system",
+            "--user-group",
+            "--home-dir",
+            str(OPT_DIR),
+            "--no-create-home",
+            "--shell",
+            "/usr/sbin/nologin",
+            _USER,
+        ]
+    )
+
+
+def ensure_dirs(*, opt_dir: Path = OPT_DIR, data_dir: Path = DATA_DIR) -> None:
+    """Create the install and data directories with the expected modes and owner."""
+    for path, mode in ((opt_dir, 0o755), (data_dir, 0o750)):
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, mode)
+        _run_checked(["chown", "-R", f"{_USER}:{_USER}", str(path)])
+
+
+def _systemctl(*args: str) -> None:
+    _run_checked(["systemctl", *args])
+
+
+def daemon_reload() -> None:
+    """Reload systemd units."""
+    _systemctl("daemon-reload")
+
+
+def enable() -> None:
+    """Enable the service at boot."""
+    _systemctl("enable", SERVICE)
+
+
+def start() -> None:
+    """Start the service."""
+    _systemctl("start", SERVICE)
+
+
+def stop() -> None:
+    """Stop the service."""
+    _systemctl("stop", SERVICE)
+
+
+def restart() -> None:
+    """Restart the service."""
+    _systemctl("restart", SERVICE)
+
+
+def disable() -> None:
+    """Disable the service at boot."""
+    _systemctl("disable", SERVICE)
+
+
+def is_active() -> bool:
+    """Return True if the service is active."""
+    return _run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0
+
+
+def service_state() -> dict[str, str]:
+    """Return the systemd active state, sub state and main PID."""
+    result = _run_checked(
+        ["systemctl", "show", SERVICE, "--property=ActiveState,SubState,MainPID"]
+    )
+    props = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    return {
+        "active-state": props.get("ActiveState", ""),
+        "sub-state": props.get("SubState", ""),
+        "main-pid": props.get("MainPID", ""),
+    }
+
+
+def http_status(url: str) -> int:
+    """Return the HTTP status of a GET, or 0 on a connection error or timeout."""
+    try:
+        with urllib.request.urlopen(url, timeout=_HEALTH_TIMEOUT) as response:  # noqa: S310
+            return response.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
+        return 0
+
+
+def wait_healthy(
+    port: int,
+    *,
+    timeout: float = 30.0,
+    interval: float = 1.0,
+    probe: Callable[[str], int] = http_status,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Poll the health endpoint until it returns 200 or the timeout elapses."""
+    url = f"http://127.0.0.1:{port}/api/health"
+    attempts = int(timeout / interval) + 1
+    for attempt in range(attempts):
+        if probe(url) == 200:
+            return True
+        if attempt < attempts - 1:
+            sleep(interval)
+    return False
+
+
+def remove_service(*, unit_path: Path = UNIT_PATH, env_path: Path = ENV_PATH) -> None:
+    """Stop and disable the service, delete its unit and env files, reload systemd."""
+    _run(["systemctl", "stop", SERVICE])
+    _run(["systemctl", "disable", SERVICE])
+    unit_path.unlink(missing_ok=True)
+    env_path.unlink(missing_ok=True)
+    daemon_reload()
