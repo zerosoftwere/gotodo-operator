@@ -1,7 +1,7 @@
 # This file configures Charmcraft.
 # See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/
 type: charm
-name: gotodo-operator
+name: gotodo
 title: GoTodo Operator
 summary: Machine charm for the GoTodo todo app with observability integrations.
 description: |
@@ -17,9 +17,8 @@ description: |
 
 # Documentation:
 # https://documentation.ubuntu.com/charmcraft/stable/howto/build-guides/select-platforms/
-base: ubuntu@24.04
 platforms:
-  amd64:
+  ubuntu@24.04:amd64:
 
 assumes:
   - juju >= 3.6

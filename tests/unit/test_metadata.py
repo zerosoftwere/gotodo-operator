@@ -11,8 +11,8 @@ CHARMCRAFT = yaml.safe_load(
 
 
 def test_platforms_amd64_only():
-    assert list(CHARMCRAFT["platforms"]) == ["amd64"]
-    assert CHARMCRAFT["base"] == "ubuntu@24.04"
+    assert list(CHARMCRAFT["platforms"]) == ["ubuntu@24.04:amd64"]
+    assert "base" not in CHARMCRAFT
     assert CHARMCRAFT["assumes"] == ["juju >= 3.6"]
 
 

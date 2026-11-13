@@ -24,7 +24,7 @@ def test_leader_publishes_v3_payload(ctx, g):
     assert p["metrics_endpoints"][0]["targets"] == ["localhost:6060"]
     assert p["metrics_endpoints"][0]["path"] == "/metrics"
     assert p["systemd_units"] == ["gotodo.service"]
-    assert p["source_topology"]["application"] == "gotodo-operator"
+    assert p["source_topology"]["application"] == "gotodo"
 
 
 def test_payload_follows_ops_port(ctx, g):

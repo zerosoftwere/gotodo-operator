@@ -1,7 +1,7 @@
 # Copyright 2026 Alhassan Ibrahim
 # See LICENSE file for licensing details.
 
-"""Integration tests for the gotodo-operator charm.
+"""Integration tests for the gotodo charm.
 
 The tests run in order and share one model: the first test deploys the charm.
 Set ``ALLOY_SUB_CHARM_PATH`` to also run the alloy-sub scrape test.

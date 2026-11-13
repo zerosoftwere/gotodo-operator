@@ -40,7 +40,7 @@ alloy-sub must always be related to gotodo over `juju-info` (it attaches the sub
 ## Target topology
 
 ```
-juju deploy ./gotodo-operator_*.charm gotodo
+juju deploy ./gotodo_*.charm gotodo
 juju deploy ./alloy-sub_*.charm alloy-sub          # or the existing alloy-sub application
 
 juju relate alloy-sub:juju-info gotodo                                    # always: attach + topology
@@ -77,7 +77,7 @@ After deploying and relating as above, and generating some traffic:
 ```
 uvx --with tox-uv tox -e format,lint,unit
 charmcraft pack
-CHARM_PATH=$(ls ./gotodo-operator_*.charm) tox -e integration
+CHARM_PATH=$(ls ./gotodo_*.charm) tox -e integration
 ```
 
 The integration tests deploy to a VM on a Juju controller. Set `ALLOY_SUB_CHARM_PATH` to also run the alloy-sub scrape test. See [CONTRIBUTING.md](CONTRIBUTING.md).
